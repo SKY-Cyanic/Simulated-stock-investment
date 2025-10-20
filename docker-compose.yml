@@ -1,0 +1,185 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: mind_trader_db
+    environment:
+      POSTGRES_DB: mind_trader
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: mind_trader_redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # RabbitMQ Message Queue
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: mind_trader_rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Game Service
+  game_service:
+    build:
+      context: ./backend/game_service
+      dockerfile: Dockerfile
+    container_name: mind_trader_game
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres123@postgres:5432/mind_trader
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://admin:admin123@rabbitmq:5672
+    ports:
+      - "8001:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./backend/game_service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # AI Engine Service
+  ai_engine:
+    build:
+      context: ./backend/ai_engine
+      dockerfile: Dockerfile
+    container_name: mind_trader_ai
+    environment:
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://admin:admin123@rabbitmq:5672
+      MODEL_PATH: /app/models
+    ports:
+      - "8002:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./backend/ai_engine:/app
+      - ai_models:/app/models
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # User Service
+  user_service:
+    build:
+      context: ./backend/user_service
+      dockerfile: Dockerfile
+    container_name: mind_trader_user
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres123@postgres:5432/mind_trader
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "8003:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/user_service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Market Data Service
+  market_data_service:
+    build:
+      context: ./backend/market_data_service
+      dockerfile: Dockerfile
+    container_name: mind_trader_market
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres123@postgres:5432/mind_trader
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "8004:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/market_data_service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # RAG Service
+  rag_service:
+    build:
+      context: ./backend/rag_service
+      dockerfile: Dockerfile
+    container_name: mind_trader_rag
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres123@postgres:5432/mind_trader
+      REDIS_URL: redis://redis:6379
+      VECTOR_DB_PATH: /app/vector_db
+    ports:
+      - "8005:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/rag_service:/app
+      - vector_db:/app/vector_db
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend/mind-trader-app
+      dockerfile: Dockerfile
+    container_name: mind_trader_frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend/mind-trader-app:/app
+      - /app/node_modules
+    environment:
+      - REACT_APP_GAME_SERVICE_URL=http://localhost:8001
+      - REACT_APP_AI_ENGINE_URL=http://localhost:8002
+      - REACT_APP_USER_SERVICE_URL=http://localhost:8003
+      - REACT_APP_MARKET_SERVICE_URL=http://localhost:8004
+      - REACT_APP_RAG_SERVICE_URL=http://localhost:8005
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  ai_models:
+  vector_db:
